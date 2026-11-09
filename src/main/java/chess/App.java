@@ -24,14 +24,16 @@ public final class App {
 
     private static Player[] players(String mode, Scanner input, int depth) {
         RandomGenerator random = new Random();
+        Eval eval = Eval.loadOrDefault(Eval.userModel());
         return switch (mode) {
             case "human-human" -> new Player[]{new Human("Player 1", input), new Human("Player 2", input)};
             case "human-random" -> new Player[]{new Human("Player", input), new RandomPlayer("Random", random)};
             case "random-human" -> new Player[]{new RandomPlayer("Random", random), new Human("Player", input)};
             case "random-random" -> new Player[]{new RandomPlayer("Random 1", random), new RandomPlayer("Random 2", random)};
-            case "human-engine" -> new Player[]{new Human("Player", input), new Engine("Engine", depth)};
-            case "engine-human" -> new Player[]{new Engine("Engine", depth), new Human("Player", input)};
-            case "engine-engine" -> new Player[]{new Engine("Engine 1", depth), new Engine("Engine 2", depth)};
+            case "human-engine" -> new Player[]{new Human("Player", input), new Engine("Engine", depth, 128, eval)};
+            case "engine-human" -> new Player[]{new Engine("Engine", depth, 128, eval), new Human("Player", input)};
+            case "engine-engine" -> new Player[]{new Engine("Engine 1", depth, 128, eval),
+                    new Engine("Engine 2", depth, 128, eval)};
             default -> throw new IllegalArgumentException("Unknown mode: " + mode);
         };
     }

@@ -19,6 +19,8 @@ The JAR opens the graphical board. Every game uses a three-minute clock with a o
 
 Click **Run Match** to start a paired two-game engine match. The second game swaps colors. The match writes `games.pgn` and `games.sqlite` to `Documents/Chess Matches`.
 
+Click **Train 10** to run ten self-play generations. Training uses depth 3, a 5-second clock, and a 0.1-second increment. Each generation plays 12 games and saves its data in `Documents/Chess Training`. You can keep playing while training runs, but both tasks share the computer's processor.
+
 The command-line interface remains available with:
 
 ```bash
@@ -65,10 +67,32 @@ The built-in book contains 24 curated lines. Each line covers eight moves for bo
 - Alekhine Defense
 - Pirc Defense
 
+## Train evaluation weights
+
+Run training without the graphical interface with:
+
+```bash
+java -cp target/chess-1.0.0.jar chess.Trainer 10 6 "$HOME/Documents/Chess Training"
+```
+
+The arguments set the number of generations, the number of opening pairs per generation, and the data folder. One opening pair produces two games with swapped colors.
+
+Each generation changes one evaluation weight and plays the candidate against the current champion. The trainer promotes the candidate only when it has at least a two-win margin and scores at least 55 percent. New graphical and command-line games load the latest promoted model from `Documents/Chess Training/weights.properties`.
+
+The training folder contains these files:
+
+- `weights.properties` contains the current champion.
+- `stats.csv` has one row per generation for charts and analysis.
+- `report.txt` summarizes game counts, promotion counts, recent scores, and current weights.
+- `models/` keeps each promoted champion.
+- `games/` contains PGN, SQLite telemetry, and both model files for every generation.
+
+The trainer changes material, activity, mobility, pawn structure, passed-pawn, king-shelter, rook-file, bishop-pair, and tempo weights. It does not change the search algorithms or the opening book.
+
 The random player remains useful as a wiring and rules stress test.
 
 ## Current rules
 
 The game enforces checks, checkmate, stalemate, castling, en passant, promotion, the fifty-move rule, threefold repetition, and the common insufficient-material cases.
 
-See [engine.md](engine.md) for the search design and the boundary between the current engine and future learning work.
+See [engine.md](engine.md) for the search and self-play design.

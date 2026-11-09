@@ -40,8 +40,16 @@ The opening suite does not consume clock time during formal matches. This isolat
 
 Elo is a measured result, not a search setting. A useful rating requires a fixed opponent pool, enough paired games, stated hardware, the same opening suite, and a confidence interval.
 
-## Learning boundary
+## Self-play training
 
-The current engine does not learn or change its evaluation after a game. The opening book and evaluation are static. This keeps the baseline reproducible.
+`Eval` contains 17 weights. The weights cover piece values, piece activity, mobility, the bishop pair, doubled and isolated pawns, passed pawns, king shelter, open files for rooks, and tempo. `SearchBoard` calculates these features at each evaluated position.
 
-The PGN and SQLite logs are the input for later learning work. A future training process can score positions or tune evaluation weights offline, then write a versioned model. The playing engine does not need an unlimited memory of past games.
+`Trainer` uses candidate-versus-champion hill climbing. Each generation changes one weight, then runs paired games with colors swapped. The trainer promotes a candidate only when it wins by at least two games and scores at least 55 percent. A rejected candidate never changes the playing model.
+
+Training defaults to depth 3, a 5-second clock, a 0.1-second increment, six opening pairs, and a 16 MB transposition table for each engine. These settings produced four games in about nine seconds during the implementation smoke test. The normal engine keeps its 128 MB table and 3+1 time control.
+
+Training stores the current champion in `weights.properties`. The graphical game and the command-line game load that file before a new game. The model stays small because it contains 17 integers instead of past positions or search trees.
+
+`stats.csv` records the candidate score, wins, draws, losses, timeouts, mutation, promotion decision, and all candidate weights for each generation. `report.txt` calculates cumulative and recent trends. Each generation also keeps PGN, SQLite move telemetry, the candidate model, and the champion model that it faced.
+
+The training process is offline and reversible. Promoted models remain in `models/`, and the match data identifies the exact candidate and champion for each generation. Self-play changes only evaluation weights. It does not rewrite search code or learn opening moves.

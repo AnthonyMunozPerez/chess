@@ -16,9 +16,24 @@ import java.util.List;
 public final class Match {
     private final Config config;
     private final OpeningBook book = new OpeningBook();
+    private final Eval evalA;
+    private final Eval evalB;
+    private final int tableMegabytes;
+    private final int openingOffset;
+    private final boolean verbose;
 
     public Match(Config config) {
+        this(config, Eval.standard(), Eval.standard(), 128, 0, true);
+    }
+
+    public Match(Config config, Eval evalA, Eval evalB, int tableMegabytes,
+                 int openingOffset, boolean verbose) {
         this.config = config;
+        this.evalA = java.util.Objects.requireNonNull(evalA);
+        this.evalB = java.util.Objects.requireNonNull(evalB);
+        this.tableMegabytes = Math.max(1, tableMegabytes);
+        this.openingOffset = Math.floorMod(openingOffset, book.lines().size());
+        this.verbose = verbose;
     }
 
     public static void main(String[] args) throws Exception {
@@ -37,7 +52,7 @@ public final class Match {
         int aWins = 0, bWins = 0, draws = 0, timeouts = 0;
         try (Store store = new Store(config.output().resolve("games.sqlite"))) {
             for (int pair = 0; pair < config.pairs(); pair++) {
-                OpeningBook.Line line = book.lines().get(pair % book.lines().size());
+                OpeningBook.Line line = book.lines().get((pair + openingOffset) % book.lines().size());
                 for (boolean swap : new boolean[]{false, true}) {
                     int number = games.size() + 1;
                     GameRecord record = play(number, line, swap);
@@ -48,7 +63,7 @@ public final class Match {
                     if (record.winner() == null) draws++;
                     else if (record.winner().equals("Engine A")) aWins++;
                     else bWins++;
-                    System.out.printf("Game %d: %s (%s)%n", number, record.score(), record.reason());
+                    if (verbose) System.out.printf("Game %d: %s (%s)%n", number, record.score(), record.reason());
                 }
             }
         }
@@ -58,8 +73,10 @@ public final class Match {
     private GameRecord play(int number, OpeningBook.Line line, boolean swap) {
         String white = swap ? "Engine B" : "Engine A";
         String black = swap ? "Engine A" : "Engine B";
-        Engine whiteEngine = new Engine(white, config.maxDepth());
-        Engine blackEngine = new Engine(black, config.maxDepth());
+        Eval whiteEval = swap ? evalB : evalA;
+        Eval blackEval = swap ? evalA : evalB;
+        Engine whiteEngine = new Engine(white, config.maxDepth(), tableMegabytes, whiteEval, verbose);
+        Engine blackEngine = new Engine(black, config.maxDepth(), tableMegabytes, blackEval, verbose);
         Game game = new Game();
         Clock clock = new Clock(config.initialMillis(), config.incrementMillis());
         List<Ply> plies = new ArrayList<>();

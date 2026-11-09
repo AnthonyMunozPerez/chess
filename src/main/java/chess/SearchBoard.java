@@ -123,23 +123,134 @@ final class SearchBoard {
     }
 
     int evaluate() {
+        return evaluate(Eval.standard());
+    }
+
+    int evaluate(Eval weights) {
         int white = 0;
+        int[] bishops = new int[2];
+        int[][] pawns = new int[2][8];
+        int[] kings = {-1, -1};
         for (int square = 0; square < 64; square++) {
             int code = board[square];
             if (code == 0) continue;
             int rank = square / 8, file = square % 8;
+            int color = code > 0 ? 1 : -1;
+            int colorIndex = code > 0 ? 0 : 1;
+            int piece = Math.abs(code);
             int advancement = code > 0 ? rank : 7 - rank;
             int centrality = 14 - (Math.abs(2 * file - 7) + Math.abs(2 * rank - 7));
-            int activity = switch (Math.abs(code)) {
-                case PAWN -> advancement * 5;
-                case KNIGHT -> centrality * 4;
-                case BISHOP -> centrality * 2;
-                case QUEEN -> centrality;
+            int activity = switch (piece) {
+                case PAWN -> advancement * weights.pawnAdvance();
+                case KNIGHT -> centrality * weights.knightCenter();
+                case BISHOP -> centrality * weights.bishopCenter();
+                case QUEEN -> centrality * weights.queenCenter();
                 default -> 0;
             };
-            white += Integer.signum(code) * (VALUE[Math.abs(code)] + activity);
+            if (piece == PAWN) pawns[colorIndex][file]++;
+            if (piece == BISHOP) bishops[colorIndex]++;
+            if (piece == KING) kings[colorIndex] = square;
+            white += color * (weights.value(piece) + activity
+                    + pieceMobility(square, code) * weights.mobility());
         }
+        if (bishops[0] >= 2) white += weights.bishopPair();
+        if (bishops[1] >= 2) white -= weights.bishopPair();
+        for (int file = 0; file < 8; file++) {
+            white -= Math.max(0, pawns[0][file] - 1) * weights.doubledPawn();
+            white += Math.max(0, pawns[1][file] - 1) * weights.doubledPawn();
+            boolean whiteIsolated = (file == 0 || pawns[0][file - 1] == 0)
+                    && (file == 7 || pawns[0][file + 1] == 0);
+            boolean blackIsolated = (file == 0 || pawns[1][file - 1] == 0)
+                    && (file == 7 || pawns[1][file + 1] == 0);
+            if (whiteIsolated) white -= pawns[0][file] * weights.isolatedPawn();
+            if (blackIsolated) white += pawns[1][file] * weights.isolatedPawn();
+        }
+        for (int square = 0; square < 64; square++) {
+            int code = board[square];
+            if (Math.abs(code) == PAWN && passedPawn(square, Integer.signum(code))) {
+                int advancement = code > 0 ? square / 8 : 7 - square / 8;
+                white += Integer.signum(code) * (advancement + 1) * weights.passedPawn();
+            } else if (Math.abs(code) == ROOK && openFile(square % 8)) {
+                white += Integer.signum(code) * weights.rookOpenFile();
+            }
+        }
+        white += kingShield(kings[0], 1) * weights.kingShield();
+        white -= kingShield(kings[1], -1) * weights.kingShield();
+        white += side > 0 ? weights.tempo() : -weights.tempo();
         return side * white;
+    }
+
+    private int pieceMobility(int square, int code) {
+        int piece = Math.abs(code), color = Integer.signum(code);
+        int file = square % 8, rank = square / 8;
+        if (piece == PAWN) {
+            int count = valid(file, rank + color) && board[(rank + color) * 8 + file] == 0 ? 1 : 0;
+            for (int df : new int[]{-1, 1}) {
+                if (valid(file + df, rank + color)
+                        && board[(rank + color) * 8 + file + df] * color < 0) count++;
+            }
+            return count;
+        }
+        if (piece == KNIGHT) return stepMobility(file, rank, color, KNIGHTS);
+        if (piece == KING) return stepMobility(file, rank, color, KINGS);
+        int count = 0;
+        if (piece == BISHOP || piece == QUEEN) count += slideMobility(file, rank, color, DIAGONALS);
+        if (piece == ROOK || piece == QUEEN) count += slideMobility(file, rank, color, STRAIGHTS);
+        return count;
+    }
+
+    private int stepMobility(int file, int rank, int color, int[][] offsets) {
+        int count = 0;
+        for (int[] offset : offsets) {
+            int nextFile = file + offset[0], nextRank = rank + offset[1];
+            if (valid(nextFile, nextRank) && board[nextRank * 8 + nextFile] * color <= 0) count++;
+        }
+        return count;
+    }
+
+    private int slideMobility(int file, int rank, int color, int[][] directions) {
+        int count = 0;
+        for (int[] direction : directions) {
+            int nextFile = file + direction[0], nextRank = rank + direction[1];
+            while (valid(nextFile, nextRank)) {
+                int target = board[nextRank * 8 + nextFile];
+                if (target * color > 0) break;
+                count++;
+                if (target != 0) break;
+                nextFile += direction[0]; nextRank += direction[1];
+            }
+        }
+        return count;
+    }
+
+    private boolean passedPawn(int square, int color) {
+        int file = square % 8, rank = square / 8;
+        for (int nextRank = rank + color; nextRank >= 0 && nextRank < 8; nextRank += color) {
+            for (int nextFile = Math.max(0, file - 1); nextFile <= Math.min(7, file + 1); nextFile++) {
+                if (board[nextRank * 8 + nextFile] == -color * PAWN) return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean openFile(int file) {
+        for (int rank = 0; rank < 8; rank++) {
+            if (Math.abs(board[rank * 8 + file]) == PAWN) return false;
+        }
+        return true;
+    }
+
+    private int kingShield(int king, int color) {
+        if (king < 0) return 0;
+        int file = king % 8, rank = king / 8, count = 0;
+        for (int distance = 1; distance <= 2; distance++) {
+            int shieldRank = rank + color * distance;
+            for (int shieldFile = Math.max(0, file - 1); shieldFile <= Math.min(7, file + 1); shieldFile++) {
+                if (valid(shieldFile, shieldRank)
+                        && board[shieldRank * 8 + shieldFile] == color * PAWN) count++;
+            }
+        }
+        return count;
     }
 
     boolean hasNonPawnMaterial() {

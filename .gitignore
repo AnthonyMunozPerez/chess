@@ -1,5 +1,7 @@
 target/
 work/
+training/
+matches/
 .idea/
 *.iml
 .DS_Store

@@ -76,7 +76,7 @@ public final class Gui {
 
     private Gui() {
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setMinimumSize(new Dimension(650, 760));
+        frame.setMinimumSize(new Dimension(920, 760));
         frame.getContentPane().setBackground(BACKGROUND);
         frame.setLayout(new BorderLayout(0, 0));
 
@@ -105,6 +105,9 @@ public final class Gui {
         JButton match = new JButton("Run Match");
         match.addActionListener(event -> runMatch(match));
         controls.add(match);
+        JButton train = new JButton("Train 10");
+        train.addActionListener(event -> runTraining(train));
+        controls.add(train);
         mode.addActionListener(event -> startGame());
         header.add(controls, BorderLayout.EAST);
 
@@ -140,7 +143,7 @@ public final class Gui {
 
     private void show() {
         frame.pack();
-        frame.setSize(790, 890);
+        frame.setSize(980, 920);
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
         startGame();
@@ -153,11 +156,12 @@ public final class Gui {
         game = new Game();
         clock = new Clock();
         int maximumDepth = (Integer) depth.getValue();
+        Eval eval = Eval.loadOrDefault(Eval.userModel());
         Mode selected = (Mode) mode.getSelectedItem();
         whiteEngine = selected != null && selected.control(chess.Color.WHITE) == Control.ENGINE
-                ? new Engine("White engine", maximumDepth) : null;
+                ? new Engine("White engine", maximumDepth, 128, eval) : null;
         blackEngine = selected != null && selected.control(chess.Color.BLACK) == Control.ENGINE
-                ? new Engine("Black engine", maximumDepth) : null;
+                ? new Engine("Black engine", maximumDepth, 128, eval) : null;
         turnStarted = System.nanoTime();
         board.reset();
         updateStatus();
@@ -323,8 +327,10 @@ public final class Gui {
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
         new SwingWorker<Match.Summary, Void>() {
             @Override protected Match.Summary doInBackground() throws Exception {
+                Eval eval = Eval.loadOrDefault(Eval.userModel());
                 return new Match(new Match.Config(1, (Integer) depth.getValue(),
-                        Clock.DEFAULT_INITIAL_MILLIS, Clock.DEFAULT_INCREMENT_MILLIS, output)).run();
+                        Clock.DEFAULT_INITIAL_MILLIS, Clock.DEFAULT_INCREMENT_MILLIS, output),
+                        eval, eval, 128, 0, true).run();
             }
 
             @Override protected void done() {
@@ -337,6 +343,31 @@ public final class Gui {
                 } catch (Exception exception) {
                     JOptionPane.showMessageDialog(frame, "Match failed: " + exception.getMessage(),
                             "Match error", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void runTraining(JButton button) {
+        button.setEnabled(false);
+        Path output = Eval.userModel().getParent();
+        status.setText("Training 10 generations at depth 3 with a 5+0.1 clock…");
+        new SwingWorker<Trainer.Summary, Void>() {
+            @Override protected Trainer.Summary doInBackground() throws Exception {
+                return new Trainer(Trainer.Config.fast(10, Trainer.DEFAULT_PAIRS, output)).run();
+            }
+
+            @Override protected void done() {
+                button.setEnabled(true);
+                try {
+                    Trainer.Summary summary = get();
+                    JOptionPane.showMessageDialog(frame, summary.display()
+                                    + "\nNew engine games will use the latest promoted weights.",
+                            "Training complete", JOptionPane.INFORMATION_MESSAGE);
+                    updateStatus();
+                } catch (Exception exception) {
+                    JOptionPane.showMessageDialog(frame, "Training failed: " + exception.getMessage(),
+                            "Training error", JOptionPane.ERROR_MESSAGE);
                 }
             }
         }.execute();

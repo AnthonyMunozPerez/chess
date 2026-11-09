@@ -11,18 +11,30 @@ public final class Engine implements Player {
     private final String name;
     private final int maxDepth;
     private final TranspositionTable table;
+    private final Eval eval;
+    private final boolean verbose;
     private final Move[][] killers = new Move[MAX_PLY][2];
     private final int[][][] history = new int[2][64][64];
     private long nodes, qnodes, ttHits, cutoffs, started, softDeadline, hardDeadline;
     private SearchLimits limits;
 
-    public Engine(String name, int maxDepth) { this(name, maxDepth, 128); }
+    public Engine(String name, int maxDepth) { this(name, maxDepth, 128, Eval.standard(), true); }
 
     public Engine(String name, int maxDepth, int tableMegabytes) {
+        this(name, maxDepth, tableMegabytes, Eval.standard(), true);
+    }
+
+    public Engine(String name, int maxDepth, int tableMegabytes, Eval eval) {
+        this(name, maxDepth, tableMegabytes, eval, true);
+    }
+
+    public Engine(String name, int maxDepth, int tableMegabytes, Eval eval, boolean verbose) {
         if (maxDepth < 1) throw new IllegalArgumentException("Engine depth must be at least 1");
         this.name = name;
         this.maxDepth = maxDepth;
         this.table = new TranspositionTable(tableMegabytes);
+        this.eval = java.util.Objects.requireNonNull(eval);
+        this.verbose = verbose;
     }
 
     @Override public String name() { return name; }
@@ -74,8 +86,11 @@ public final class Engine implements Player {
         }
         List<Move> pv = principalVariation(new SearchBoard(position), completedDepth, best);
         SearchResult result = result(best, completedDepth, score, stopped, pv);
-        System.out.printf("%s plays %s (depth %d, score %s, %,d nodes, %,d nps)%n",
-                name, best, completedDepth, displayScore(score), nodes + qnodes, result.stats().nodesPerSecond());
+        if (verbose) {
+            System.out.printf("%s plays %s (depth %d, score %s, %,d nodes, %,d nps)%n",
+                    name, best, completedDepth, displayScore(score), nodes + qnodes,
+                    result.stats().nodesPerSecond());
+        }
         return result;
     }
 
@@ -107,7 +122,7 @@ public final class Engine implements Player {
     private int search(SearchBoard board, int depth, int alpha, int beta, int ply, boolean allowNull) {
         checkStop();
         nodes++;
-        if (ply >= MAX_PLY - 1) return board.evaluate();
+        if (ply >= MAX_PLY - 1) return board.evaluate(eval);
         if (board.halfmove() >= 100) return 0;
         boolean inCheck = board.inCheck();
         if (depth <= 0) return quiescence(board, alpha, beta, ply);
@@ -182,7 +197,7 @@ public final class Engine implements Player {
         checkStop();
         qnodes++;
         boolean inCheck = board.inCheck();
-        int standPat = board.evaluate();
+        int standPat = board.evaluate(eval);
         if (!inCheck) {
             if (standPat >= beta) return beta;
             if (standPat > alpha) alpha = standPat;
