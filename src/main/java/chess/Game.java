@@ -4,10 +4,12 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 
 public final class Game {
     private Position position;
     private final Map<String, Integer> repetitions = new HashMap<>();
+    private final List<Move> history = new ArrayList<>();
 
     public Game() {
         this(Position.initial());
@@ -26,12 +28,17 @@ public final class Game {
         return Moves.legal(position);
     }
 
+    public List<Move> history() {
+        return List.copyOf(history);
+    }
+
     public void play(Move move) {
         List<Move> legal = legalMoves();
         if (!legal.contains(move)) {
             throw new IllegalArgumentException("Illegal move: " + move);
         }
         position = position.applyUnchecked(move);
+        history.add(move);
         recordPosition();
     }
 

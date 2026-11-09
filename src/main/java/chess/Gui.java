@@ -2,6 +2,7 @@ package chess;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -27,7 +28,11 @@ import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Random;
 
 public final class Gui {
     private static final Color BACKGROUND = new Color(31, 34, 40);
@@ -38,11 +43,22 @@ public final class Gui {
     private final JFrame frame = new JFrame("Chess");
     private final JLabel status = new JLabel(" ", SwingConstants.CENTER);
     private final JComboBox<Mode> mode = new JComboBox<>(Mode.values());
-    private final JSpinner depth = new JSpinner(new SpinnerNumberModel(3, 1, 6, 1));
+    private final JSpinner depth = new JSpinner(new SpinnerNumberModel(64, 1, 64, 1));
+    private final JCheckBox useBook = new JCheckBox("Book", true);
+    private final JLabel whiteClock = new JLabel("3:00", SwingConstants.CENTER);
+    private final JLabel blackClock = new JLabel("3:00", SwingConstants.CENTER);
     private final Board board = new Board();
+    private final OpeningBook openingBook = new OpeningBook();
+    private final Random random = new Random();
+    private final Timer clockTimer;
 
     private Game game = new Game();
+    private Clock clock = new Clock();
+    private Engine whiteEngine;
+    private Engine blackEngine;
     private boolean engineThinking;
+    private String forcedResult;
+    private long turnStarted;
     private int generation;
 
     public static void main(String[] args) {
@@ -75,14 +91,20 @@ public final class Gui {
 
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 9, 0));
         controls.setOpaque(false);
-        JLabel depthLabel = new JLabel("Depth");
+        JLabel depthLabel = new JLabel("Max depth");
         depthLabel.setForeground(MUTED);
         controls.add(mode);
         controls.add(depthLabel);
         controls.add(depth);
+        useBook.setOpaque(false);
+        useBook.setForeground(TEXT);
+        controls.add(useBook);
         JButton newGame = new JButton("New Game");
         newGame.addActionListener(event -> startGame());
         controls.add(newGame);
+        JButton match = new JButton("Run Match");
+        match.addActionListener(event -> runMatch(match));
+        controls.add(match);
         mode.addActionListener(event -> startGame());
         header.add(controls, BorderLayout.EAST);
 
@@ -96,10 +118,14 @@ public final class Gui {
         north.add(status, BorderLayout.SOUTH);
         frame.add(north, BorderLayout.NORTH);
 
-        JPanel boardHolder = new JPanel(new BorderLayout());
+        JPanel boardHolder = new JPanel(new BorderLayout(0, 8));
         boardHolder.setBackground(BACKGROUND);
         boardHolder.setBorder(BorderFactory.createEmptyBorder(12, 22, 10, 22));
+        styleClock(blackClock);
+        styleClock(whiteClock);
+        boardHolder.add(blackClock, BorderLayout.NORTH);
         boardHolder.add(board, BorderLayout.CENTER);
+        boardHolder.add(whiteClock, BorderLayout.SOUTH);
         frame.add(boardHolder, BorderLayout.CENTER);
 
         JLabel help = new JLabel("Drag a piece or click it, then click a highlighted square.", SwingConstants.CENTER);
@@ -107,6 +133,9 @@ public final class Gui {
         help.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
         help.setBorder(BorderFactory.createEmptyBorder(4, 12, 15, 12));
         frame.add(help, BorderLayout.SOUTH);
+
+        clockTimer = new Timer(100, event -> tickClock());
+        clockTimer.start();
     }
 
     private void show() {
@@ -120,17 +149,33 @@ public final class Gui {
     private void startGame() {
         generation++;
         engineThinking = false;
+        forcedResult = null;
         game = new Game();
+        clock = new Clock();
+        int maximumDepth = (Integer) depth.getValue();
+        Mode selected = (Mode) mode.getSelectedItem();
+        whiteEngine = selected != null && selected.control(chess.Color.WHITE) == Control.ENGINE
+                ? new Engine("White engine", maximumDepth) : null;
+        blackEngine = selected != null && selected.control(chess.Color.BLACK) == Control.ENGINE
+                ? new Engine("Black engine", maximumDepth) : null;
+        turnStarted = System.nanoTime();
         board.reset();
         updateStatus();
         runEngineIfNeeded();
     }
 
     private void playHuman(Move move) {
-        if (!humanTurn() || engineThinking || game.result().finished()) {
+        if (!humanTurn() || engineThinking || finished()) {
+            return;
+        }
+        chess.Color mover = game.position().sideToMove();
+        long elapsed = elapsedSinceTurnStart();
+        if (!clock.completeMove(mover, elapsed)) {
+            declareTimeout(mover);
             return;
         }
         game.play(move);
+        turnStarted = System.nanoTime();
         board.lastMove = move;
         board.resetSelection();
         updateStatus();
@@ -148,7 +193,7 @@ public final class Gui {
     private void runEngineIfNeeded() {
         Result result = game.result();
         Mode selected = (Mode) mode.getSelectedItem();
-        if (result.finished() || selected == null
+        if (result.finished() || forcedResult != null || selected == null
                 || selected.control(game.position().sideToMove()) != Control.ENGINE) {
             return;
         }
@@ -159,13 +204,20 @@ public final class Gui {
         int runGeneration = generation;
         Position position = game.position();
         List<Move> legal = game.legalMoves();
-        int engineDepth = (Integer) depth.getValue();
-        String engineName = position.sideToMove() == chess.Color.WHITE ? "White engine" : "Black engine";
+        chess.Color mover = position.sideToMove();
+        Engine engine = mover == chess.Color.WHITE ? whiteEngine : blackEngine;
+        long remaining = clock.remaining(mover);
+        Move bookMove = useBook.isSelected() ? openingBook.choose(position, legal, random) : null;
+        long searchStarted = System.nanoTime();
 
-        new SwingWorker<Move, Void>() {
+        new SwingWorker<EngineMove, Void>() {
             @Override
-            protected Move doInBackground() {
-                return new Engine(engineName, engineDepth).chooseMove(position, legal);
+            protected EngineMove doInBackground() {
+                if (bookMove != null) return new EngineMove(bookMove, true, null, 0);
+                SearchResult searched = engine.search(position, legal,
+                        SearchLimits.timed(remaining, clock.incrementMillis()));
+                long elapsed = Math.max(1, (System.nanoTime() - searchStarted + 999_999) / 1_000_000);
+                return new EngineMove(searched.move(), false, searched.stats(), elapsed);
             }
 
             @Override
@@ -174,9 +226,15 @@ public final class Gui {
                     return;
                 }
                 try {
-                    Move move = get();
-                    game.play(move);
-                    board.lastMove = move;
+                    EngineMove engineMove = get();
+                    if (forcedResult != null) return;
+                    if (!engineMove.book() && !clock.completeMove(mover, engineMove.elapsedMillis())) {
+                        declareTimeout(mover);
+                        return;
+                    }
+                    game.play(engineMove.move());
+                    turnStarted = System.nanoTime();
+                    board.lastMove = engineMove.move();
                     engineThinking = false;
                     board.repaint();
                     updateStatus();
@@ -195,7 +253,9 @@ public final class Gui {
 
     private void updateStatus() {
         Result result = game.result();
-        if (result.finished()) {
+        if (forcedResult != null) {
+            status.setText(forcedResult);
+        } else if (result.finished()) {
             status.setText(result.description());
         } else if (engineThinking) {
             status.setText(colorName(game.position().sideToMove()) + " engine is thinking…");
@@ -204,6 +264,85 @@ public final class Gui {
             status.setText(colorName(game.position().sideToMove()) + " to move" + check);
         }
         board.repaint();
+        updateClocks();
+    }
+
+    private void tickClock() {
+        if (!frame.isVisible() || finished()) {
+            updateClocks();
+            return;
+        }
+        chess.Color mover = game.position().sideToMove();
+        if (elapsedSinceTurnStart() >= clock.remaining(mover)) {
+            declareTimeout(mover);
+        } else {
+            updateClocks();
+        }
+    }
+
+    private void updateClocks() {
+        long white = clock.remaining(chess.Color.WHITE);
+        long black = clock.remaining(chess.Color.BLACK);
+        if (!finished()) {
+            long elapsed = elapsedSinceTurnStart();
+            if (game.position().sideToMove() == chess.Color.WHITE) white = Math.max(0, white - elapsed);
+            else black = Math.max(0, black - elapsed);
+        }
+        whiteClock.setText("White   " + Clock.display(white));
+        blackClock.setText("Black   " + Clock.display(black));
+    }
+
+    private long elapsedSinceTurnStart() {
+        return Math.max(0, (System.nanoTime() - turnStarted + 999_999) / 1_000_000);
+    }
+
+    private boolean finished() {
+        return forcedResult != null || game.result().finished();
+    }
+
+    private void declareTimeout(chess.Color loser) {
+        clock.setRemaining(loser, 0);
+        engineThinking = false;
+        forcedResult = colorName(loser.opposite()) + " wins on time.";
+        board.resetSelection();
+        updateStatus();
+    }
+
+    private static void styleClock(JLabel label) {
+        label.setOpaque(true);
+        label.setBackground(PANEL);
+        label.setForeground(TEXT);
+        label.setFont(new Font(Font.MONOSPACED, Font.BOLD, 22));
+        label.setBorder(BorderFactory.createEmptyBorder(7, 12, 7, 12));
+    }
+
+    private void runMatch(JButton button) {
+        button.setEnabled(false);
+        status.setText("Running a paired 3+1 engine match in the background…");
+        Path output = Path.of(System.getProperty("user.home"), "Documents", "Chess Matches",
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+        new SwingWorker<Match.Summary, Void>() {
+            @Override protected Match.Summary doInBackground() throws Exception {
+                return new Match(new Match.Config(1, (Integer) depth.getValue(),
+                        Clock.DEFAULT_INITIAL_MILLIS, Clock.DEFAULT_INCREMENT_MILLIS, output)).run();
+            }
+
+            @Override protected void done() {
+                button.setEnabled(true);
+                try {
+                    Match.Summary summary = get();
+                    JOptionPane.showMessageDialog(frame, summary.display(), "Match complete",
+                            JOptionPane.INFORMATION_MESSAGE);
+                    updateStatus();
+                } catch (Exception exception) {
+                    JOptionPane.showMessageDialog(frame, "Match failed: " + exception.getMessage(),
+                            "Match error", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private record EngineMove(Move move, boolean book, SearchStats stats, long elapsedMillis) {
     }
 
     private Move choosePromotion(List<Move> candidates) {
@@ -312,7 +451,7 @@ public final class Gui {
         }
 
         private void press(MouseEvent event) {
-            if (!humanTurn() || engineThinking || game.result().finished()) {
+            if (!humanTurn() || engineThinking || finished()) {
                 return;
             }
             Square square = squareAt(event.getPoint());

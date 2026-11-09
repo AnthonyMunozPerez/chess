@@ -36,4 +36,29 @@ class EngineTest {
 
         assertEquals(Move.parse("a1a8"), chosen);
     }
+
+    @Test
+    void returnsImmediatelyWhenOnlyOneMoveIsLegal() {
+        Position position = Position.fromFen("7k/8/8/8/8/8/6r1/7K w - - 0 1");
+        List<Move> legal = Moves.legal(position);
+
+        SearchResult result = new Engine("Test", 64, 1)
+                .search(position, legal, new SearchLimits(64, Long.MAX_VALUE, 100, 200));
+
+        assertEquals(1, legal.size());
+        assertEquals(Move.parse("h1g2"), result.move());
+        assertEquals(0, result.stats().depth());
+    }
+
+    @Test
+    void hardDeadlineReturnsTheLastCompletedIteration() {
+        Position position = Position.initial();
+        List<Move> legal = Moves.legal(position);
+
+        SearchResult result = new Engine("Test", 64, 4)
+                .search(position, legal, new SearchLimits(64, Long.MAX_VALUE, 5, 20));
+
+        assertTrue(legal.contains(result.move()));
+        assertTrue(result.stats().elapsedMillis() < 1_000);
+    }
 }
